@@ -15,12 +15,10 @@ export async function POST(req: NextRequest) {
 
         const token = authHeader.split("Bearer ")[1];
         let uid;
-
         try {
             const decodedToken = await adminAuth.verifyIdToken(token);
             uid = decodedToken.uid;
         } catch (e) {
-            // Bypass verification in development if needed
             if (process.env.NODE_ENV === 'development') {
                 console.warn("Auth verification failed - continuing for dev (insecure).");
             } else {
@@ -29,22 +27,16 @@ export async function POST(req: NextRequest) {
         }
 
         const { event, details, cityName } = await req.json();
-
-        // Use passed cityName if available to avoid DB lookup (which might fail locally)
         let city = cityName || "Unknown";
-
         if (!cityName && uid) {
             try {
                 const userDoc = await adminDb.collection("users").doc(uid).get();
                 if (userDoc.exists) {
                     city = userDoc.data()?.cityName || "Unknown";
                 }
-            } catch (e) {
-                console.warn("DB Read failed (likely no service account). Using default city.");
-            }
+            } catch (e) { }
         }
 
-        // Construct System Prompt
         const systemPrompt = `
       You are Tyler. You are not a helper. You are not an assistant.
       You are a nihilistic, anti-consumerist, brutal judge of discipline.
@@ -73,6 +65,22 @@ export async function POST(req: NextRequest) {
             userContent += ` Details: ${JSON.stringify(details)}.`;
         }
 
+        // 1. If Chat, Save User Message First
+        if (event === "chat_message" && details?.message && uid) {
+            try {
+                await adminDb.collection("users").doc(uid).collection("messages").add({
+                    content: details.message,
+                    sender: "user",
+                    createdAt: new Date(),
+                    trigger: "chat_input"
+                });
+                userContent = `User asks: "${details.message}"`;
+            } catch (e) {
+                console.warn("Failed to save user chat msg", e);
+            }
+        }
+
+        // 2. Generate Tyler Response
         let responseText = "System malfunction.";
         try {
             if (process.env.GROQ_API_KEY && !process.env.GROQ_API_KEY.includes('replace-me')) {
@@ -83,19 +91,19 @@ export async function POST(req: NextRequest) {
                     ],
                     model: "llama-3.3-70b-versatile",
                     temperature: 0.7,
-                    max_tokens: 100,
+                    max_tokens: 150,
                 });
                 responseText = completion.choices[0]?.message?.content || "No comment.";
             } else {
-                console.error("GROQ_API_KEY missing or is placeholder.");
-                responseText = "Tyler is silent. (Check GROQ_API_KEY in .env.local)";
+                console.error("GROQ_API_KEY missing");
+                responseText = "Tyler is silent. (Check GROQ_API_KEY)";
             }
         } catch (e: any) {
             console.error("Groq API Error:", e);
             responseText = "Tyler is offline. " + e.message;
         }
 
-        // Try to Save Tyler's response and Points
+        // 3. Save Tyler's Response
         let saved = false;
         if (uid) {
             try {
@@ -103,6 +111,7 @@ export async function POST(req: NextRequest) {
                 const msgRef = adminDb.collection("users").doc(uid).collection("messages").doc();
                 batch.set(msgRef, {
                     content: responseText,
+                    sender: "tyler",
                     createdAt: new Date(),
                     trigger: event
                 });
@@ -112,15 +121,13 @@ export async function POST(req: NextRequest) {
                     try {
                         const { FieldValue } = require("firebase-admin/firestore");
                         batch.update(userRef, { points: FieldValue.increment(10) });
-                    } catch (err) {
-                        // Fallback
-                    }
+                    } catch (err) { }
                 }
 
                 await batch.commit();
                 saved = true;
             } catch (e) {
-                console.warn("DB Write failed (likely no service account). Client should save message.");
+                console.warn("DB Write failed", e);
                 saved = false;
             }
         }
