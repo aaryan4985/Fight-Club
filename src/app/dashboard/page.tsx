@@ -51,16 +51,20 @@ export default function DashboardPage() {
                 </nav>
             </header>
 
-            <TylerStatus />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 min-h-[500px]">
+                <div className="space-y-8">
+                    <WorkoutLogger cityName={cityName} />
 
-            <WorkoutLogger cityName={cityName} />
+                    <div className="pt-8 opacity-30 pointer-events-none grayscale">
+                        <h3 className="text-[10px] uppercase tracking-widest text-zinc-600 mb-4">Recent Activity</h3>
+                        <div className="text-xs text-zinc-500 font-mono">
+                            <p>LOGS ARE ARCHIVED.</p>
+                        </div>
+                    </div>
+                </div>
 
-            {/* Basic History Feed could go here */}
-            <div className="pt-8">
-                <h3 className="text-[10px] uppercase tracking-widest text-zinc-600 mb-4">Recent Activity</h3>
-                <div className="text-xs text-zinc-500 font-mono">
-                    {/* Real implementation would map over 'workouts' collection */}
-                    <p>LOGS ARE ARCHIVED.</p>
+                <div className="h-full">
+                    <TylerStatus />
                 </div>
             </div>
         </div>
