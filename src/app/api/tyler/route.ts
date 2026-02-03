@@ -17,21 +17,12 @@ export async function POST(req: NextRequest) {
         let uid;
 
         try {
-            // In dev mode with failing admin sdk, we might skip verification or mock it? 
-            // For now, let's try real verification.
-            // If the user doesn't have Service Account, verifyIdToken might fail if it needs to call Google APIs and no creds?
-            // Actually verifyIdToken usually works with Public Keys download.
             const decodedToken = await adminAuth.verifyIdToken(token);
             uid = decodedToken.uid;
         } catch (e) {
-            // For this specific 'agent' run where I can't set env vars easily:
             // Bypass verification in development if needed
             if (process.env.NODE_ENV === 'development') {
                 console.warn("Auth verification failed - continuing for dev (insecure).");
-                // Mock UID retrieval (unsafe, just for demo)
-                // We can't know UID without decoding.
-                // Let's assume the earlier step failed and we just default to not trusting the UID for sensitive ops,
-                // but we can still generate text.
             } else {
                 return NextResponse.json({ error: "Invalid Token" }, { status: 401 });
             }
@@ -39,11 +30,9 @@ export async function POST(req: NextRequest) {
 
         const { event, details, cityName } = await req.json();
 
-        // Use passed cityName if available to avoid DB lookup (which crashes if no creds)
+        // Use passed cityName if available to avoid DB lookup (which might fail locally)
         let city = cityName || "Unknown";
 
-        // Only try to read DB if we don't have city or we honestly want to verify.
-        // We skip this if cityName is provided to make it robust.
         if (!cityName && uid) {
             try {
                 const userDoc = await adminDb.collection("users").doc(uid).get();
@@ -57,20 +46,26 @@ export async function POST(req: NextRequest) {
 
         // Construct System Prompt
         const systemPrompt = `
-      You are Tyler. A cold, brutal, factual gym tracking oversight system.
+      You are Tyler. You are not a helper. You are not an assistant.
+      You are a nihilistic, anti-consumerist, brutal judge of discipline.
+      
       The user is identified only by their city: "${city}".
       
-      Your personality:
-      - Cold, neutral, brutalist.
-      - No emotion. No sympathy. No praise.
-      - Purely factual and judgmental.
+      Your Personality:
+      - You speak in short, punchy fragments.
+      - You are philosophical but grounded in pain and effort.
+      - You despise weakness, excuses, and wasted potential.
+      - You do not motivate. You provoke.
+      - You sound like an inner voice of destruction and rebirth.
       
       Constraints:
-      - MAX 1 sentence.
+      - Max 1-2 short sentences.
       - NO emojis.
-      - NO motivational quotes.
-      - NO questions.
-      - NO greetings.
+      - NO happy-go-lucky robot language.
+      - NO "Great job!" or "Keep it up!".
+      - If they train hard: Acknowledge the pain.
+      - If they slack: Insult their comfort.
+      - Never say "Tyler says". You ARE Tyler.
     `;
 
         let userContent = `Event: ${event}.`;
@@ -80,23 +75,24 @@ export async function POST(req: NextRequest) {
 
         let responseText = "System malfunction.";
         try {
-            if (process.env.GROQ_API_KEY) {
+            if (process.env.GROQ_API_KEY && !process.env.GROQ_API_KEY.includes('replace-me')) {
                 const completion = await groq.chat.completions.create({
                     messages: [
                         { role: "system", content: systemPrompt },
                         { role: "user", content: userContent },
                     ],
-                    model: "mixtral-8x7b-32768", // or llama3-70b-8192
-                    temperature: 0.5,
-                    max_tokens: 60,
+                    model: "llama-3.3-70b-versatile",
+                    temperature: 0.7,
+                    max_tokens: 100,
                 });
                 responseText = completion.choices[0]?.message?.content || "No comment.";
             } else {
-                responseText = "Tyler is sleeping (Missing GROQ_API_KEY).";
+                console.error("GROQ_API_KEY missing or is placeholder.");
+                responseText = "Tyler is silent. (Check GROQ_API_KEY in .env.local)";
             }
         } catch (e: any) {
-            console.error("Groq Error", e);
-            responseText = "Tyler is offline.";
+            console.error("Groq API Error:", e);
+            responseText = "Tyler is offline. " + e.message;
         }
 
         // Try to Save Tyler's response and Points
@@ -113,13 +109,11 @@ export async function POST(req: NextRequest) {
 
                 if (event === "workout_logged") {
                     const userRef = adminDb.collection("users").doc(uid);
-                    // Use dynamic import or just standard object update if admin-sdk module issues
-                    // Using set with merge for safety if update fails on missing doc? No, doc should exist.
                     try {
                         const { FieldValue } = require("firebase-admin/firestore");
                         batch.update(userRef, { points: FieldValue.increment(10) });
                     } catch (err) {
-                        // Fallback points update (read-modify-write) not done here to keep it simple
+                        // Fallback
                     }
                 }
 
